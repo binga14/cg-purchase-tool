@@ -36,6 +36,7 @@ class ForecastConfig:
     top_n: Optional[int] = 300
     use_lag_regressor: bool = True
     max_products: Optional[int] = None
+    excel_sheet_name: str = "Sales Order Line Sample"
 
 
 @dataclass(frozen=True)
@@ -218,12 +219,12 @@ PROPHET_PARAM_GRIDS = {
 }
 
 
-def run_forecast_csv(
+def run_forecast_file(
     input_path: Path,
     output_path: Path,
     config: ForecastConfig = ForecastConfig(),
 ) -> ForecastRunResult:
-    sales = read_sales_csv(input_path)
+    sales = read_sales_file(input_path, config)
     product_uom_weekly, global_min_week, global_max_week = build_weekly_sales(sales, config)
     product_uom_weekly, eligible_skus = filter_eligible_series(
         product_uom_weekly, global_max_week, config
@@ -273,9 +274,30 @@ def run_forecast_csv(
     )
 
 
+def run_forecast_csv(
+    input_path: Path,
+    output_path: Path,
+    config: ForecastConfig = ForecastConfig(),
+) -> ForecastRunResult:
+    return run_forecast_file(input_path, output_path, config)
+
+
+def read_sales_file(input_path: Path, config: ForecastConfig) -> pd.DataFrame:
+    extension = input_path.suffix.lower().lstrip(".")
+    if extension == "csv":
+        return read_sales_csv(input_path)
+    if extension == "xlsx":
+        return read_sales_xlsx(input_path, config)
+    raise ForecastInputError("Forecast input must be a .csv or .xlsx file.")
+
+
+def find_missing_required_columns(columns: list[str]) -> list[str]:
+    return [column for column in REQUIRED_COLUMNS if column not in columns]
+
+
 def read_sales_csv(input_path: Path) -> pd.DataFrame:
     columns = pd.read_csv(input_path, nrows=0).columns.tolist()
-    missing_columns = [column for column in REQUIRED_COLUMNS if column not in columns]
+    missing_columns = find_missing_required_columns(columns)
     if missing_columns:
         missing = ", ".join(missing_columns)
         raise ForecastInputError(f"CSV is missing required columns: {missing}")
@@ -283,6 +305,31 @@ def read_sales_csv(input_path: Path) -> pd.DataFrame:
     sales = pd.read_csv(input_path, usecols=REQUIRED_COLUMNS)
     if sales.empty:
         raise ForecastInputError("CSV has no sales rows.")
+    return sales
+
+
+def read_sales_xlsx(input_path: Path, config: ForecastConfig) -> pd.DataFrame:
+    workbook = pd.ExcelFile(input_path)
+    if not workbook.sheet_names:
+        raise ForecastInputError("Excel workbook has no sheets.")
+
+    sheet_name = (
+        config.excel_sheet_name
+        if config.excel_sheet_name in workbook.sheet_names
+        else workbook.sheet_names[0]
+    )
+
+    columns = pd.read_excel(workbook, sheet_name=sheet_name, nrows=0).columns.tolist()
+    missing_columns = find_missing_required_columns(columns)
+    if missing_columns:
+        missing = ", ".join(missing_columns)
+        raise ForecastInputError(
+            f"Excel sheet '{sheet_name}' is missing required columns: {missing}"
+        )
+
+    sales = pd.read_excel(workbook, sheet_name=sheet_name, usecols=REQUIRED_COLUMNS)
+    if sales.empty:
+        raise ForecastInputError(f"Excel sheet '{sheet_name}' has no sales rows.")
     return sales
 
 
@@ -317,7 +364,7 @@ def build_weekly_sales(
     sales_clean = sales_clean[sales_clean["uom"] == config.target_uom.upper()].copy()
     if sales_clean.empty:
         raise ForecastInputError(
-            f"CSV has no valid rows for target UOM {config.target_uom.upper()}."
+            f"Input file has no valid rows for target UOM {config.target_uom.upper()}."
         )
 
     sales_clean["week_start"] = sales_clean["order_date"].dt.to_period("W-SUN").apply(

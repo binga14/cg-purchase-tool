@@ -1,5 +1,7 @@
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -9,9 +11,12 @@ from app.schemas.forecast import ForecastJobResponse
 from app.schemas.upload import ErrorResponse
 from app.services.file_storage_service import build_stored_filename, save_upload_file
 from app.services.forecast_job_store import ForecastJob, forecast_job_store, utc_now_iso
-from app.services.forecast_service import run_forecast_csv
+from app.services.forecast_service import run_forecast_file
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
+
+ALLOWED_FORECAST_EXTENSIONS = {"csv", "xlsx"}
+REQUIRED_XLSX_PARTS = {"[Content_Types].xml", "xl/workbook.xml"}
 
 
 def error_response(status_code: int, code: str, message: str) -> HTTPException:
@@ -36,7 +41,7 @@ def serialize_job(job: ForecastJob) -> ForecastJobResponse:
     )
 
 
-async def validate_forecast_csv_upload(upload_file: UploadFile) -> None:
+async def validate_forecast_upload(upload_file: UploadFile) -> None:
     settings = get_settings()
 
     if not upload_file.filename:
@@ -46,11 +51,12 @@ async def validate_forecast_csv_upload(upload_file: UploadFile) -> None:
             "Uploaded file must include a filename.",
         )
 
-    if file_extension(upload_file.filename) != "csv":
+    extension = file_extension(upload_file.filename)
+    if extension not in ALLOWED_FORECAST_EXTENSIONS:
         raise error_response(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             "unsupported_file_type",
-            "Forecasting currently accepts .csv uploads only.",
+            "Forecasting accepts .csv and .xlsx uploads only.",
         )
 
     content = await upload_file.read(settings.max_upload_size_bytes + 1)
@@ -60,7 +66,7 @@ async def validate_forecast_csv_upload(upload_file: UploadFile) -> None:
         raise error_response(
             status.HTTP_400_BAD_REQUEST,
             "empty_file",
-            "Uploaded CSV is empty.",
+            "Uploaded file is empty.",
         )
 
     if len(content) > settings.max_upload_size_bytes:
@@ -71,6 +77,24 @@ async def validate_forecast_csv_upload(upload_file: UploadFile) -> None:
             f"Uploaded file must be {max_mb} MB or smaller.",
         )
 
+    if extension == "xlsx":
+        try:
+            with ZipFile(BytesIO(content)) as workbook:
+                workbook_parts = set(workbook.namelist())
+        except BadZipFile as exc:
+            raise error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "invalid_xlsx_file",
+                "The uploaded .xlsx file is not a valid Excel workbook.",
+            ) from exc
+
+        if not REQUIRED_XLSX_PARTS.issubset(workbook_parts):
+            raise error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "invalid_xlsx_file",
+                "The uploaded .xlsx file is missing required workbook data.",
+            )
+
 
 def run_forecast_job(job_id: str) -> None:
     job = forecast_job_store.mark_processing(job_id)
@@ -78,7 +102,7 @@ def run_forecast_job(job_id: str) -> None:
         return
 
     try:
-        run_forecast_csv(job.input_path, job.output_path)
+        run_forecast_file(job.input_path, job.output_path)
     except Exception as exc:
         forecast_job_store.mark_failed(job_id, str(exc))
         return
@@ -102,7 +126,7 @@ async def create_forecast_job(
     file: UploadFile = File(...),
 ) -> ForecastJobResponse:
     settings = get_settings()
-    await validate_forecast_csv_upload(file)
+    await validate_forecast_upload(file)
 
     stored_filename = build_stored_filename(file.filename or "forecast-upload.csv")
     try:
