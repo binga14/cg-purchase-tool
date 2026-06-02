@@ -1,0 +1,8 @@
+fastapi==0.125.0
+holidays==0.85
+numpy==2.3.5
+pandas==2.3.3
+prophet==1.2.1
+python-multipart==0.0.20
+statsmodels==0.14.6
+uvicorn[standard]==0.38.0
