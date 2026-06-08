@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from app.api.forecasts import router as forecasts_router
-from app.api.uploads import router as uploads_router
+from app.api.pipeline import router as pipeline_router
 from app.core.config import get_settings
 
 settings = get_settings()
+settings.static_dir.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title=settings.app_name)
 
@@ -23,5 +24,5 @@ async def health_check():
     return {"status": "ok"}
 
 
-app.include_router(uploads_router, prefix=settings.api_prefix)
-app.include_router(forecasts_router, prefix=settings.api_prefix)
+app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
+app.include_router(pipeline_router)

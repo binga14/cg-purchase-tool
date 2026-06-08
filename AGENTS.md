@@ -1,4 +1,4 @@
-The backend handles Excel uploads, demand forecasting, inventory comparison, purchase-order calculation, output Excel generation, job tracking, and scheduled execution.
+<!-- The backend handles Excel uploads, demand forecasting, inventory comparison, purchase-order calculation, output Excel generation, job tracking, and scheduled execution. -->
 
 ## Tech Stack
 
@@ -11,7 +11,7 @@ The backend handles Excel uploads, demand forecasting, inventory comparison, pur
 - Alembic for migrations
 - APScheduler for background jobs
 
-## Main Backend Responsibilities
+<!-- ## Main Backend Responsibilities
 
 1. Receive Excel upload.
 2. Validate uploaded Excel.
@@ -23,9 +23,9 @@ The backend handles Excel uploads, demand forecasting, inventory comparison, pur
 8. Generate purchase-order Excel.
 9. Store output file.
 10. Expose download endpoint.
-11. Run scheduled jobs.
+11. Run scheduled jobs. -->
 
-## Suggested Structure
+<!-- ## Suggested Structure
 
 ```txt
 backend/
@@ -56,4 +56,4 @@ backend/
       tasks.py
       scheduler.py
     utils/
-      logging.py
+      logging.py -->
