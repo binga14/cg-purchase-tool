@@ -13,16 +13,16 @@ from app.schemas.pipeline import (
 from app.services.cg_pipeline_service import (
     FORECASTING,
     LOADING,
-    MONTHLY_UPLOAD,
     SUCCESSFUL,
     TRAIN_DATA_PREP,
+    WEEKLY_UPLOAD,
     PipelineError,
     pipeline_state,
     prepare_train_data,
     replace_training_data,
     run_forecast_from_prepared_train,
-    store_monthly_upload,
-    validate_monthly_upload_content,
+    store_weekly_upload,
+    validate_weekly_upload_content,
 )
 
 router = APIRouter(tags=["cg pipeline"])
@@ -85,18 +85,18 @@ def run_forecast_task() -> None:
         500: {"model": ErrorResponse},
     },
 )
-async def upload_monthly_data(file: UploadFile = File(...)) -> UploadResponse:
+async def upload_weekly_data(file: UploadFile = File(...)) -> UploadResponse:
     content = await file.read()
-    pipeline_state.mark_loading(MONTHLY_UPLOAD)
+    pipeline_state.mark_loading(WEEKLY_UPLOAD)
 
     try:
-        validate_monthly_upload_content(file.filename, content)
-        upload_path, stored_filename, static_url = store_monthly_upload(
-            file.filename or "monthly-data.xlsx",
+        validate_weekly_upload_content(file.filename, content)
+        upload_path, stored_filename, static_url = store_weekly_upload(
+            file.filename or "weekly-data.xlsx",
             content,
         )
     except PipelineError as exc:
-        pipeline_state.mark_failed(MONTHLY_UPLOAD, str(exc))
+        pipeline_state.mark_failed(WEEKLY_UPLOAD, str(exc))
         raise error_response(
             exc.status_code,
             exc.code,
@@ -104,7 +104,7 @@ async def upload_monthly_data(file: UploadFile = File(...)) -> UploadResponse:
         ) from exc
     except OSError as exc:
         message = "Uploaded file could not be stored. Please try again."
-        pipeline_state.mark_failed(MONTHLY_UPLOAD, message)
+        pipeline_state.mark_failed(WEEKLY_UPLOAD, message)
         raise error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "file_storage_failed",
@@ -112,7 +112,7 @@ async def upload_monthly_data(file: UploadFile = File(...)) -> UploadResponse:
         ) from exc
 
     pipeline_state.set_latest_upload(file.filename or stored_filename, upload_path, static_url)
-    pipeline_state.mark_successful(MONTHLY_UPLOAD)
+    pipeline_state.mark_successful(WEEKLY_UPLOAD)
     return UploadResponse(
         fileName=file.filename or stored_filename,
         storedFileName=stored_filename,
@@ -165,14 +165,14 @@ async def replace_total_training_data(file: UploadFile = File(...)) -> TrainingD
 )
 async def trigger_train_data_prep(background_tasks: BackgroundTasks) -> PhaseTriggerResponse:
     snapshot = pipeline_state.snapshot()
-    monthly_phase = next(
-        phase for phase in snapshot.phases if phase.phase == MONTHLY_UPLOAD
+    weekly_phase = next(
+        phase for phase in snapshot.phases if phase.phase == WEEKLY_UPLOAD
     )
-    if monthly_phase.status != SUCCESSFUL or snapshot.latest_upload_path is None:
+    if weekly_phase.status != SUCCESSFUL or snapshot.latest_upload_path is None:
         raise error_response(
             status.HTTP_409_CONFLICT,
-            "monthly_upload_required",
-            "Upload monthly data before preparing train data.",
+            "weekly_upload_required",
+            "Upload weekly data before preparing train data.",
         )
 
     if pipeline_state.is_loading(TRAIN_DATA_PREP):

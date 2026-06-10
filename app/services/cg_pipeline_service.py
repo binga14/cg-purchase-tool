@@ -25,11 +25,11 @@ LOADING = "Loading"
 SUCCESSFUL = "Successful"
 FAILED = "Failed"
 
-MONTHLY_UPLOAD = "monthly data upload"
+WEEKLY_UPLOAD = "weekly data upload"
 TRAIN_DATA_PREP = "train data prep"
 FORECASTING = "forecasting"
 
-PIPELINE_PHASES = (MONTHLY_UPLOAD, TRAIN_DATA_PREP, FORECASTING)
+PIPELINE_PHASES = (WEEKLY_UPLOAD, TRAIN_DATA_PREP, FORECASTING)
 REQUIRED_XLSX_PARTS = {"[Content_Types].xml", "xl/workbook.xml"}
 TRAINING_DATA_EXTENSIONS = {"csv", "xlsx"}
 
@@ -154,7 +154,7 @@ class CGPipelineState:
 pipeline_state = CGPipelineState()
 
 
-def validate_monthly_upload_content(filename: Optional[str], content: bytes) -> None:
+def validate_weekly_upload_content(filename: Optional[str], content: bytes) -> None:
     settings = get_settings()
     if not filename:
         raise PipelineError("Uploaded file must include a filename.", "missing_filename")
@@ -288,11 +288,11 @@ def validate_sales_sheet_headers(upload_source: BytesIO, source_train_file: Path
         )
 
 
-def store_monthly_upload(filename: str, content: bytes) -> tuple[Path, str, str]:
+def store_weekly_upload(filename: str, content: bytes) -> tuple[Path, str, str]:
     settings = get_settings()
     stored_filename = build_stored_filename(filename)
-    settings.monthly_upload_dir.mkdir(parents=True, exist_ok=True)
-    upload_path = settings.monthly_upload_dir / stored_filename
+    settings.weekly_upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = settings.weekly_upload_dir / stored_filename
     upload_path.write_bytes(content)
     static_url = f"/static/uploads/{stored_filename}"
     return upload_path, stored_filename, static_url
@@ -304,8 +304,8 @@ def prepare_train_data() -> Path:
     upload_path = snapshot.latest_upload_path
     if upload_path is None:
         raise PipelineError(
-            "Upload monthly data before preparing train data.",
-            "monthly_upload_required",
+            "Upload weekly data before preparing train data.",
+            "weekly_upload_required",
             status.HTTP_409_CONFLICT,
         )
     if not settings.source_train_file.exists():

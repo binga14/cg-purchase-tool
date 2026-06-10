@@ -3,7 +3,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 
-PhaseName = Literal["monthly data upload", "train data prep", "forecasting"]
+PhaseName = Literal["weekly data upload", "train data prep", "forecasting"]
 PhaseStatus = Literal["Yet to start", "Loading", "Successful", "Failed"]
 
 

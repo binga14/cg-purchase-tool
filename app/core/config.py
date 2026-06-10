@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class Settings(BaseModel):
     app_name: str = "Forecast Purchase API"
     static_dir: Path = Path("storage/static")
-    monthly_upload_dir: Path = Path("storage/static/uploads")
+    weekly_upload_dir: Path = Path("storage/static/uploads")
     source_train_file: Path = Path("storage/uploads/cg-data.xlsx")
     prepared_train_file: Path = Path("storage/train/cg-data-train.csv")
     forecast_result_file: Path = Path("storage/results/forecast.csv")
