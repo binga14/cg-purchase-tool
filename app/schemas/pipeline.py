@@ -50,3 +50,14 @@ class PhaseTriggerResponse(BaseModel):
     phase: PhaseName
     status: PhaseStatus
     message: str
+
+
+class DatePeriodResponse(BaseModel):
+    startDate: str
+    endDate: str
+
+
+class ForecastTriggerResponse(PhaseTriggerResponse):
+    trainingDataPeriod: DatePeriodResponse
+    forecastingPeriod: DatePeriodResponse
+    forecastHorizonWeeks: int

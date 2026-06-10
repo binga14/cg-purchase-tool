@@ -4,6 +4,8 @@ from fastapi.responses import FileResponse
 from app.core.config import get_settings
 from app.schemas.pipeline import (
     ErrorResponse,
+    DatePeriodResponse,
+    ForecastTriggerResponse,
     PhaseTriggerResponse,
     PipelinePhaseResponse,
     PipelineStatusResponse,
@@ -17,6 +19,7 @@ from app.services.cg_pipeline_service import (
     TRAIN_DATA_PREP,
     WEEKLY_UPLOAD,
     PipelineError,
+    get_forecast_period_info,
     pipeline_state,
     prepare_train_data,
     replace_training_data,
@@ -193,10 +196,10 @@ async def trigger_train_data_prep(background_tasks: BackgroundTasks) -> PhaseTri
 
 @router.post(
     "/forecast",
-    response_model=PhaseTriggerResponse,
+    response_model=ForecastTriggerResponse,
     responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def trigger_forecast(background_tasks: BackgroundTasks) -> PhaseTriggerResponse:
+async def trigger_forecast(background_tasks: BackgroundTasks) -> ForecastTriggerResponse:
     snapshot = pipeline_state.snapshot()
     train_phase = next(
         phase for phase in snapshot.phases if phase.phase == TRAIN_DATA_PREP
@@ -219,20 +222,30 @@ async def trigger_forecast(background_tasks: BackgroundTasks) -> PhaseTriggerRes
             "Forecasting is already running.",
         )
 
+    try:
+        period_info = get_forecast_period_info(snapshot.train_data_path)
+    except PipelineError as exc:
+        raise error_response(exc.status_code, exc.code, str(exc)) from exc
+
     pipeline_state.mark_loading(FORECASTING)
     background_tasks.add_task(run_forecast_task)
-    return PhaseTriggerResponse(
+    return ForecastTriggerResponse(
         phase=FORECASTING,
         status=LOADING,
         message="Forecasting started.",
+        trainingDataPeriod=DatePeriodResponse(
+            startDate=period_info.training_start_date,
+            endDate=period_info.training_end_date,
+        ),
+        forecastingPeriod=DatePeriodResponse(
+            startDate=period_info.forecasting_start_date,
+            endDate=period_info.forecasting_end_date,
+        ),
+        forecastHorizonWeeks=period_info.forecast_horizon_weeks,
     )
 
 
-@router.get(
-    "/results",
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
-)
-async def download_forecast_results() -> FileResponse:
+def build_forecast_results_response() -> FileResponse:
     settings = get_settings()
     snapshot = pipeline_state.snapshot()
     forecast_phase = next(
@@ -257,6 +270,14 @@ async def download_forecast_results() -> FileResponse:
         filename=settings.forecast_result_file.name,
         media_type="text/csv",
     )
+
+
+@router.get(
+    "/results",
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def download_forecast_results() -> FileResponse:
+    return build_forecast_results_response()
 
 
 @router.get("/status", response_model=PipelineStatusResponse)

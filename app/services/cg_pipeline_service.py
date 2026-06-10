@@ -69,6 +69,15 @@ class PipelineSnapshot:
     forecast_result_path: Optional[Path]
 
 
+@dataclass
+class ForecastPeriodInfo:
+    training_start_date: str
+    training_end_date: str
+    forecasting_start_date: str
+    forecasting_end_date: str
+    forecast_horizon_weeks: int
+
+
 class CGPipelineState:
     def __init__(self) -> None:
         self._lock = Lock()
@@ -392,6 +401,46 @@ def replace_training_data(filename: Optional[str], content: bytes) -> Path:
     training_data.to_csv(settings.prepared_train_file, index=False)
     pipeline_state.set_train_data_path(settings.prepared_train_file)
     return settings.prepared_train_file
+
+
+def get_forecast_period_info(
+    train_data_path: Path,
+    config: ForecastConfig = ForecastConfig(),
+) -> ForecastPeriodInfo:
+    try:
+        training_dates = pd.read_csv(train_data_path, usecols=["order_date"])["order_date"]
+    except ValueError as exc:
+        raise PipelineError(
+            "Training data is missing required column: order_date",
+            "missing_required_columns",
+        ) from exc
+
+    parsed_dates = pd.to_datetime(training_dates, errors="coerce").dropna()
+    if parsed_dates.empty:
+        raise PipelineError(
+            "Training data has no valid order_date values.",
+            "invalid_training_dates",
+        )
+
+    training_start_date = parsed_dates.min().date().isoformat()
+    training_end_date = parsed_dates.max().date().isoformat()
+    latest_training_week = parsed_dates.dt.to_period("W-SUN").apply(
+        lambda row: row.start_time
+    ).max()
+
+    forecasting_start_week = latest_training_week + pd.Timedelta(weeks=1)
+    forecasting_end_week = latest_training_week + pd.Timedelta(
+        weeks=config.forecast_horizon_weeks
+    )
+    forecasting_end_date = forecasting_end_week + pd.Timedelta(days=6)
+
+    return ForecastPeriodInfo(
+        training_start_date=training_start_date,
+        training_end_date=training_end_date,
+        forecasting_start_date=forecasting_start_week.date().isoformat(),
+        forecasting_end_date=forecasting_end_date.date().isoformat(),
+        forecast_horizon_weeks=config.forecast_horizon_weeks,
+    )
 
 
 def run_forecast_from_prepared_train() -> Path:
