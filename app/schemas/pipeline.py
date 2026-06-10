@@ -30,6 +30,7 @@ class PipelineStatusResponse(BaseModel):
     latestUploadUrl: Optional[str]
     trainDataPath: Optional[str]
     forecastResultPath: Optional[str]
+    latestSalesDate: Optional[str]
 
 
 class UploadResponse(BaseModel):

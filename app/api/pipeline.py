@@ -23,7 +23,7 @@ from app.services.cg_pipeline_service import (
     pipeline_state,
     prepare_train_data,
     replace_training_data,
-    run_forecast_from_prepared_train,
+    run_forecast_pipeline_task,
     store_weekly_upload,
     validate_weekly_upload_content,
 )
@@ -54,6 +54,7 @@ def serialize_status() -> PipelineStatusResponse:
         forecastResultPath=(
             str(snapshot.forecast_result_path) if snapshot.forecast_result_path else None
         ),
+        latestSalesDate=snapshot.latest_sales_date,
     )
 
 
@@ -68,13 +69,7 @@ def run_train_data_prep_task() -> None:
 
 
 def run_forecast_task() -> None:
-    try:
-        run_forecast_from_prepared_train()
-    except Exception as exc:
-        pipeline_state.mark_failed(FORECASTING, str(exc))
-        return
-
-    pipeline_state.mark_successful(FORECASTING)
+    run_forecast_pipeline_task()
 
 
 @router.post(
@@ -215,19 +210,18 @@ async def trigger_forecast(background_tasks: BackgroundTasks) -> ForecastTrigger
             "Prepare train data before running the forecast.",
         )
 
-    if pipeline_state.is_loading(FORECASTING):
+    try:
+        period_info = get_forecast_period_info(snapshot.train_data_path)
+    except PipelineError as exc:
+        raise error_response(exc.status_code, exc.code, str(exc)) from exc
+
+    if not pipeline_state.try_mark_loading(FORECASTING):
         raise error_response(
             status.HTTP_409_CONFLICT,
             "forecast_in_progress",
             "Forecasting is already running.",
         )
 
-    try:
-        period_info = get_forecast_period_info(snapshot.train_data_path)
-    except PipelineError as exc:
-        raise error_response(exc.status_code, exc.code, str(exc)) from exc
-
-    pipeline_state.mark_loading(FORECASTING)
     background_tasks.add_task(run_forecast_task)
     return ForecastTriggerResponse(
         phase=FORECASTING,

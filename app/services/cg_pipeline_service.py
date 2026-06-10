@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from threading import Lock
 from typing import Optional, Union
+from zoneinfo import ZoneInfo
 from zipfile import BadZipFile, ZipFile
 
 import pandas as pd
@@ -67,6 +68,7 @@ class PipelineSnapshot:
     latest_upload_url: Optional[str]
     train_data_path: Optional[Path]
     forecast_result_path: Optional[Path]
+    latest_sales_date: Optional[str]
 
 
 @dataclass
@@ -87,6 +89,7 @@ class CGPipelineState:
         self._latest_upload_url: Optional[str] = None
         self._train_data_path: Optional[Path] = None
         self._forecast_result_path: Optional[Path] = None
+        self._latest_sales_date: Optional[str] = None
 
     def snapshot(self) -> PipelineSnapshot:
         with self._lock:
@@ -106,6 +109,7 @@ class CGPipelineState:
                 latest_upload_url=self._latest_upload_url,
                 train_data_path=self._train_data_path,
                 forecast_result_path=self._forecast_result_path,
+                latest_sales_date=self._latest_sales_date,
             )
 
     def is_loading(self, phase_name: str) -> bool:
@@ -146,6 +150,7 @@ class CGPipelineState:
             self._latest_upload_url = upload_url
             self._train_data_path = None
             self._forecast_result_path = None
+            self._latest_sales_date = None
             self._phases[TRAIN_DATA_PREP] = PipelinePhase(phase=TRAIN_DATA_PREP)
             self._phases[FORECASTING] = PipelinePhase(phase=FORECASTING)
 
@@ -153,14 +158,48 @@ class CGPipelineState:
         with self._lock:
             self._train_data_path = train_data_path
             self._forecast_result_path = None
+            self._latest_sales_date = read_latest_sales_date(train_data_path)
+            self._phases[FORECASTING] = PipelinePhase(phase=FORECASTING)
+
+    def mark_cg_data_prepared(self, train_data_path: Path) -> None:
+        with self._lock:
+            self._train_data_path = train_data_path
+            self._forecast_result_path = None
+            self._latest_sales_date = read_latest_sales_date(train_data_path)
             self._phases[FORECASTING] = PipelinePhase(phase=FORECASTING)
 
     def set_forecast_result_path(self, forecast_result_path: Path) -> None:
         with self._lock:
             self._forecast_result_path = forecast_result_path
 
+    def try_mark_loading(self, phase_name: str) -> bool:
+        with self._lock:
+            phase = self._phases[phase_name]
+            if phase.status == LOADING:
+                return False
+            phase.status = LOADING
+            phase.started_at = utc_now_iso()
+            phase.completed_at = None
+            phase.error_message = None
+            return True
+
 
 pipeline_state = CGPipelineState()
+
+
+def read_latest_sales_date(train_data_path: Path) -> Optional[str]:
+    try:
+        training_dates = pd.read_csv(train_data_path, usecols=["order_date"])[
+            "order_date"
+        ]
+    except (FileNotFoundError, ValueError):
+        return None
+
+    parsed_dates = pd.to_datetime(training_dates, errors="coerce").dropna()
+    if parsed_dates.empty:
+        return None
+
+    return parsed_dates.max().date().isoformat()
 
 
 def validate_weekly_upload_content(filename: Optional[str], content: bytes) -> None:
@@ -344,7 +383,7 @@ def prepare_train_data() -> Path:
     train_data = pd.concat([source_sales, uploaded_sales], ignore_index=True)
     settings.prepared_train_file.parent.mkdir(parents=True, exist_ok=True)
     train_data.to_csv(settings.prepared_train_file, index=False)
-    pipeline_state.set_train_data_path(settings.prepared_train_file)
+    pipeline_state.mark_cg_data_prepared(settings.prepared_train_file)
     return settings.prepared_train_file
 
 
@@ -461,3 +500,45 @@ def run_forecast_from_prepared_train() -> Path:
 
     pipeline_state.set_forecast_result_path(settings.forecast_result_file)
     return settings.forecast_result_file
+
+
+def run_forecast_pipeline_task() -> None:
+    try:
+        run_forecast_from_prepared_train()
+    except Exception as exc:
+        pipeline_state.mark_failed(FORECASTING, str(exc))
+        return
+
+    pipeline_state.mark_successful(FORECASTING)
+
+
+def latest_sales_date_is_recent_enough(
+    train_data_path: Path,
+    max_age_weeks: int,
+) -> bool:
+    latest_sales_date = read_latest_sales_date(train_data_path)
+    if latest_sales_date is None:
+        return False
+
+    settings = get_settings()
+    latest_sales_day = date.fromisoformat(latest_sales_date)
+    today = datetime.now(ZoneInfo(settings.scheduled_forecast_timezone)).date()
+    age = today - latest_sales_day
+    return age <= timedelta(weeks=max_age_weeks)
+
+
+def run_scheduled_forecast_if_ready() -> bool:
+    settings = get_settings()
+    snapshot = pipeline_state.snapshot()
+    if snapshot.train_data_path is None or not snapshot.train_data_path.exists():
+        return False
+    if not latest_sales_date_is_recent_enough(
+        snapshot.train_data_path,
+        settings.scheduled_forecast_max_sales_age_weeks,
+    ):
+        return False
+    if not pipeline_state.try_mark_loading(FORECASTING):
+        return False
+
+    run_forecast_pipeline_task()
+    return True
