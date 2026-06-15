@@ -522,7 +522,7 @@ def latest_sales_date_is_recent_enough(
 
     settings = get_settings()
     latest_sales_day = date.fromisoformat(latest_sales_date)
-    today = datetime.now(ZoneInfo(settings.scheduled_forecast_timezone)).date()
+    today = datetime.now(ZoneInfo(settings.scheduled_timezone)).date()
     age = today - latest_sales_day
     return age <= timedelta(weeks=max_age_weeks)
 

@@ -1,10 +1,12 @@
-apscheduler==3.11.1
+celery[redis]==5.4.0
 fastapi==0.125.0
 holidays==0.85
 numpy==2.3.5
 openpyxl==3.1.5
 pandas==2.3.3
 prophet==1.2.1
+python-dotenv==1.0.1
 python-multipart==0.0.20
+resend==2.16.0
 statsmodels==0.14.6
 uvicorn[standard]==0.38.0

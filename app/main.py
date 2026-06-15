@@ -4,7 +4,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.pipeline import router as pipeline_router
 from app.core.config import get_settings
-from app.workers.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
 settings.static_dir.mkdir(parents=True, exist_ok=True)
@@ -23,16 +22,6 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-
-@app.on_event("startup")
-async def start_background_services() -> None:
-    start_scheduler()
-
-
-@app.on_event("shutdown")
-async def stop_background_services() -> None:
-    stop_scheduler()
 
 
 app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
