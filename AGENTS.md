@@ -1,31 +1,26 @@
-<!-- The backend handles Excel uploads, demand forecasting, inventory comparison, purchase-order calculation, output Excel generation, job tracking, and scheduled execution. -->
+<!-- The backend runs saved demand forecasting artifacts on a schedule, stores the forecast CSV, tracks job status, and emails the generated CSV report. -->
 
 ## Tech Stack
 
 - FastAPI
 - Python
 - Pandas
-- openpyxl
-- PostgreSQL
-- SQLAlchemy or SQLModel
-- Alembic for migrations
-- APScheduler for background jobs
+- NumPy
+- Prophet
+- Celery
+- Redis
+- Resend
 
-<!-- ## Main Backend Responsibilities
+## Main Backend Responsibilities
 
-1. Receive Excel upload.
-2. Validate uploaded Excel.
-3. Store uploaded file.
-4. Create upload/job records.
-5. Run demand forecasting.
-6. Compare forecast with current inventory.
-7. Calculate purchase quantities.
-8. Generate purchase-order Excel.
-9. Store output file.
-10. Expose download endpoint.
-11. Run scheduled jobs. -->
+1. Load saved forecast artifacts from `storage/forecast_artifacts`.
+2. Generate the 2-week forecast CSV in `storage/forecasts`.
+3. Track forecast and email job state in `storage/status/job-status.json`.
+4. Expose `GET /health` and `GET /status`.
+5. Schedule forecast and email jobs through Celery Beat.
+6. Email the latest forecast CSV through Resend.
 
-<!-- ## Suggested Structure
+## Structure
 
 ```txt
 backend/
@@ -33,27 +28,17 @@ backend/
     main.py
     core/
       config.py
-      database.py
-    api/
-      uploads.py
-      jobs.py
-      downloads.py
-    models/
-      upload.py
-      forecast_job.py
-      purchase_order.py
-    schemas/
-      upload.py
-      job.py
-      purchase_order.py
     services/
-      excel_service.py
       forecast_service.py
-      inventory_service.py
-      purchase_order_service.py
-      file_storage_service.py
+      email_service.py
+      job_status_service.py
+      forecasting/
+        predict_from_saved_models.py
     workers/
+      celery_app.py
       tasks.py
-      scheduler.py
-    utils/
-      logging.py -->
+  storage/
+    forecast_artifacts/
+    forecasts/
+    status/
+```

@@ -1,0 +1,18 @@
+{
+  "target_uom": "PIEZA",
+  "top_n": 300,
+  "forecast_horizon_weeks": 2,
+  "test_weeks": 2,
+  "last_training_week": "2026-05-25",
+  "output_columns": [
+    "sku",
+    "product_name",
+    "uom",
+    "category_l1",
+    "category_l2",
+    "week_start_date",
+    "forecasted_qty"
+  ],
+  "output_file_name": "pieza_top_300_weekly_forecast.csv",
+  "ma_blend_weight": 0.5
+}

@@ -1,66 +1,214 @@
-## Run command
-python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+# Forecast Email Backend
 
-python3 -m uvicorn app.main:app --reload --host localhost --port 8000
+This backend runs the packaged Prophet forecasting artifacts, writes the latest
+2-week CSV forecast, tracks job status, and emails the CSV report on a schedule.
 
-swagger link: http://localhost:8000/docs
+Current workflow:
 
-## Scheduled forecast and email
+1. Celery Beat schedules the forecast job for Sunday at 10 PM.
+2. The forecast job loads saved artifacts from `storage/forecast_artifacts`.
+3. The generated CSV is written to
+   `storage/forecasts/pieza_top_300_weekly_forecast.csv`.
+4. Celery Beat schedules the email job for Monday at 10 AM.
+5. The email job attaches the latest forecast CSV and sends it through Resend.
 
-Scheduling runs on **Celery + Celery Beat** with a Redis broker. By default the
-forecast runs Sunday 10 PM and the forecast CSV is emailed Monday 10 AM. All
-scheduled jobs share a single timezone (`SCHEDULED_TIMEZONE`, default GMT-6 /
-America/Mexico_City).
+The generated CSV is not committed to git. The `storage/forecasts/` folder is
+kept with `.gitkeep`, and the CSV appears there after the forecast job runs.
 
-Run the scheduler stack alongside the API:
+## API
+
+- `GET /health` - service health check.
+- `GET /status` - latest forecast/email job status from
+  `storage/status/job-status.json`.
+
+Run locally:
 
 ```bash
-# Redis broker
-docker run -d -p 6379:6379 redis:7
-
-# Worker (runs the tasks) and Beat (fires the schedule)
-celery -A app.workers.celery_app worker --loglevel=info
-celery -A app.workers.celery_app beat --loglevel=info
+python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Add these environment variables before starting the backend (see `.env.example`):
+Swagger UI is available at `http://localhost:8000/docs`.
+
+## Requirements
+
+Use a virtual environment if possible:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
+```
+
+The forecast runner requires `numpy`, `pandas`, and `prophet` in addition to the
+API, worker, Redis, and email dependencies.
+
+## Environment
+
+Create `.env` from `.env.example` and fill in real email values:
+
+```bash
+cp .env.example .env
+```
+
+Required runtime values:
 
 ```env
-# Single timezone for all scheduled jobs (IANA name). Mexico_City = permanent GMT-6.
+RESEND_API_KEY=re_your_api_key
+EMAIL_FROM_EMAIL=forecast@your-verified-domain.com
+FORECAST_REPORT_RECIPIENT_EMAIL=client@example.com
+```
+
+`FORECAST_REPORT_RECIPIENT_EMAIL` accepts one or more comma-separated addresses.
+
+The rest of the app has defaults in `app/core/config.py`. Current defaults:
+
+```env
 SCHEDULED_TIMEZONE=America/Mexico_City
 
 SCHEDULED_FORECAST_ENABLED=true
 SCHEDULED_FORECAST_DAY_OF_WEEK=sun
 SCHEDULED_FORECAST_HOUR=22
 SCHEDULED_FORECAST_MINUTE=0
-SCHEDULED_FORECAST_MAX_SALES_AGE_WEEKS=2
 
 SCHEDULED_EMAIL_ENABLED=true
 SCHEDULED_EMAIL_DAY_OF_WEEK=mon
 SCHEDULED_EMAIL_HOUR=10
 SCHEDULED_EMAIL_MINUTE=0
 
-# Celery / Redis
+FORECAST_MODEL_CALLABLE=app.services.forecasting.predict_from_saved_models:run_saved_model_forecast
+FORECAST_ARTIFACT_DIR=storage/forecast_artifacts
+FORECAST_HORIZON_DAYS=14
+FORECAST_RESULT_FILE=storage/forecasts/pieza_top_300_weekly_forecast.csv
+JOB_STATUS_FILE=storage/status/job-status.json
+
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 
-# Resend email
-RESEND_API_KEY=re_your_api_key
-EMAIL_FROM_EMAIL=forecast@yourdomain.com
 EMAIL_FROM_NAME=Forecast Purchase App
-FORECAST_REPORT_RECIPIENT_EMAIL=alice@example.com,bob@example.com
+FORECAST_EMAIL_SUBJECT=Weekly 2-week sales forecast
 ```
 
-`FORECAST_REPORT_RECIPIENT_EMAIL` is where the weekly forecast email is sent —
-one or more comma-separated addresses. The email includes the latest forecast CSV
-as an attachment.
+Set any of those in `.env` or server environment variables only when you need to
+override the default, for example when Redis is not on localhost.
 
-## Resend setup
+## Forecast Artifacts
 
-1. Create or log into a [Resend](https://resend.com) account.
-2. Go to **API Keys** and create a key; put it in `RESEND_API_KEY`.
-3. Go to **Domains**, add and verify your sending domain.
+The saved model runner expects:
+
+```txt
+storage/forecast_artifacts/
+  config.json
+  metadata.csv
+  models/
+    model_*.json
+```
+
+The current artifacts are configured for:
+
+- UOM: `PIEZA`
+- SKUs: top 300
+- Horizon: 2 weekly forecast periods
+- Output: `sku`, `product_name`, `uom`, `category_l1`, `category_l2`,
+  `week_start_date`, `forecasted_qty`
+
+## Manual Testing
+
+Compile/import check:
+
+```bash
+python3 -m compileall -q app
+```
+
+Run the forecast directly:
+
+```bash
+python3 - <<'PY'
+from app.services.forecast_service import run_forecast
+
+result = run_forecast()
+print(result)
+PY
+```
+
+Verify the CSV:
+
+```bash
+ls -lh storage/forecasts/
+python3 - <<'PY'
+import pandas as pd
+
+path = "storage/forecasts/pieza_top_300_weekly_forecast.csv"
+df = pd.read_csv(path)
+print(df.shape)
+print(df.head())
+print(df["sku"].nunique())
+PY
+```
+
+Run the API smoke test:
+
+```bash
+python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/status
+```
+
+Run scheduled task functions manually without waiting for the clock:
+
+```bash
+python3 - <<'PY'
+from app.workers.tasks import run_scheduled_forecast
+
+print(run_scheduled_forecast())
+PY
+```
+
+After configuring Resend with real values:
+
+```bash
+python3 - <<'PY'
+from app.workers.tasks import send_forecast_email
+
+print(send_forecast_email())
+PY
+```
+
+## Scheduled Jobs
+
+Scheduling runs on Celery + Celery Beat with Redis.
+
+Start Redis:
+
+```bash
+docker run -d -p 6379:6379 redis:7
+```
+
+Start a worker:
+
+```bash
+celery -A app.workers.celery_app worker --loglevel=info
+```
+
+Start Beat in another terminal:
+
+```bash
+celery -A app.workers.celery_app beat --loglevel=info
+```
+
+Beat should register:
+
+- `scheduled-forecast`
+- `scheduled-forecast-email`
+
+## Resend Setup
+
+1. Create or log into a Resend account.
+2. Create an API key and set `RESEND_API_KEY`.
+3. Add and verify the sending domain in Resend.
 4. Set `EMAIL_FROM_EMAIL` to an address on that verified domain.
+5. Set `FORECAST_REPORT_RECIPIENT_EMAIL` to the real recipient list.
 
-For a quick test without verifying a domain, use `onboarding@resend.dev` as the
-`EMAIL_FROM_EMAIL`.
+For a sandbox check, Resend can use `onboarding@resend.dev` as the sender, but
+delivery is limited by Resend's sandbox rules. For a true end-to-end test, use a
+verified sender domain and a recipient inbox you can check.

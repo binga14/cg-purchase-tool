@@ -1,12 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
-from app.api.pipeline import router as pipeline_router
 from app.core.config import get_settings
+from app.services.job_status_service import read_status
 
 settings = get_settings()
-settings.static_dir.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title=settings.app_name)
 
@@ -24,5 +22,6 @@ async def health_check():
     return {"status": "ok"}
 
 
-app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
-app.include_router(pipeline_router)
+@app.get("/status")
+async def job_status():
+    return read_status()

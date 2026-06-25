@@ -5,59 +5,63 @@ from pathlib import Path
 import resend
 
 from app.core.config import get_settings
-from app.services.cg_pipeline_service import (
-    FORECASTING,
-    SUCCESSFUL,
-    get_forecast_period_info,
-    pipeline_state,
-)
+
+
+class ForecastEmailError(RuntimeError):
+    pass
+
+
+PLACEHOLDER_EMAIL_DOMAINS = {
+    "example.com",
+    "yourdomain.com",
+    "your-verified-domain.com",
+}
+
+
+def email_domain(email: str) -> str:
+    return email.rsplit("@", 1)[-1].strip().lower()
+
+
+def validate_email_settings() -> None:
+    settings = get_settings()
+    missing = []
+    if not settings.resend_api_key:
+        missing.append("RESEND_API_KEY")
+    if not settings.email_from_email:
+        missing.append("EMAIL_FROM_EMAIL")
+    if not settings.forecast_report_recipients:
+        missing.append("FORECAST_REPORT_RECIPIENT_EMAIL")
+
+    if missing:
+        raise ForecastEmailError(
+            f"Missing required email settings: {', '.join(missing)}"
+        )
+
+    placeholder_emails = [
+        email
+        for email in (settings.email_from_email, *settings.forecast_report_recipients)
+        if email_domain(email) in PLACEHOLDER_EMAIL_DOMAINS
+    ]
+    if placeholder_emails:
+        raise ForecastEmailError(
+            "Replace placeholder email settings before sending: "
+            + ", ".join(placeholder_emails)
+        )
 
 
 def build_forecast_email_body() -> str:
     settings = get_settings()
-    snapshot = pipeline_state.snapshot()
-
-    lines = [
-        "Hello,",
-        "",
-        "The latest forecast run has completed successfully. The forecast CSV is attached.",
-    ]
-
-    if snapshot.train_data_path and snapshot.train_data_path.exists():
-        try:
-            period_info = get_forecast_period_info(snapshot.train_data_path)
-            lines.extend(
-                [
-                    "",
-                    "Training data period:",
-                    f"- {period_info.training_start_date} to {period_info.training_end_date}",
-                    "",
-                    "Forecasting period:",
-                    f"- {period_info.forecasting_start_date} to {period_info.forecasting_end_date}",
-                    f"- Horizon: {period_info.forecast_horizon_weeks} weeks",
-                ]
-            )
-        except Exception:
-            if snapshot.latest_sales_date:
-                lines.extend(["", f"Latest sales date: {snapshot.latest_sales_date}"])
-
-    lines.extend(
+    return "\n".join(
         [
+            "Hello,",
+            "",
+            "The latest 2-week sales forecast has been generated successfully.",
+            "The forecast CSV is attached.",
+            "",
+            f"Forecast horizon: {settings.forecast_horizon_days} days",
             "",
             "Regards,",
-            "Forecast Purchase App",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def validate_email_settings() -> bool:
-    settings = get_settings()
-    return all(
-        [
-            settings.resend_api_key,
-            settings.email_from_email,
-            settings.forecast_report_recipients,
+            settings.email_from_name,
         ]
     )
 
@@ -69,7 +73,7 @@ def build_forecast_email_params(result_path: Path) -> "resend.Emails.SendParams"
     return {
         "from": formataddr((settings.email_from_name, settings.email_from_email)),
         "to": list(settings.forecast_report_recipients),
-        "subject": "Weekly forecast report",
+        "subject": settings.forecast_email_subject,
         "text": build_forecast_email_body(),
         "attachments": [
             {
@@ -81,24 +85,14 @@ def build_forecast_email_params(result_path: Path) -> "resend.Emails.SendParams"
     }
 
 
-def send_forecast_email_if_ready() -> bool:
+def send_forecast_email() -> None:
     settings = get_settings()
-    if not settings.scheduled_email_enabled:
-        return False
-    if not validate_email_settings():
-        print("Email settings are incomplete. Scheduled forecast email was skipped.")
-        return False
+    result_path = settings.forecast_result_file
+    if not result_path.exists():
+        raise ForecastEmailError(f"Forecast CSV was not found at '{result_path}'.")
+    if result_path.stat().st_size == 0:
+        raise ForecastEmailError(f"Forecast CSV at '{result_path}' is empty.")
 
-    snapshot = pipeline_state.snapshot()
-    forecast_phase = next(
-        phase for phase in snapshot.phases if phase.phase == FORECASTING
-    )
-    if forecast_phase.status != SUCCESSFUL:
-        return False
-    if not settings.forecast_result_file.exists():
-        return False
-
+    validate_email_settings()
     resend.api_key = settings.resend_api_key
-    resend.Emails.send(build_forecast_email_params(settings.forecast_result_file))
-
-    return True
+    resend.Emails.send(build_forecast_email_params(result_path))

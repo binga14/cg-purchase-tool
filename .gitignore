@@ -13,8 +13,7 @@ env/
 
 .env
 .env.*
+!.env.example
 
-storage/uploads/*
 storage/forecasts/*
-!storage/uploads/.gitkeep
 !storage/forecasts/.gitkeep
