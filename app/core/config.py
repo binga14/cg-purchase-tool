@@ -63,7 +63,7 @@ class Settings(BaseModel):
         or "app.services.forecasting.predict_from_saved_models:run_saved_model_forecast"
     )
     forecast_horizon_days: int = Field(
-        default_factory=lambda: get_int_env("FORECAST_HORIZON_DAYS", 14)
+        default_factory=lambda: get_int_env("FORECAST_HORIZON_DAYS", 28)
     )
     scheduled_timezone: str = Field(
         default_factory=lambda: os.getenv("SCHEDULED_TIMEZONE", "America/Mexico_City")
@@ -72,10 +72,10 @@ class Settings(BaseModel):
         default_factory=lambda: get_bool_env("SCHEDULED_FORECAST_ENABLED", True)
     )
     scheduled_forecast_day_of_week: str = Field(
-        default_factory=lambda: os.getenv("SCHEDULED_FORECAST_DAY_OF_WEEK", "sun")
+        default_factory=lambda: os.getenv("SCHEDULED_FORECAST_DAY_OF_WEEK", "mon")
     )
     scheduled_forecast_hour: int = Field(
-        default_factory=lambda: get_int_env("SCHEDULED_FORECAST_HOUR", 22)
+        default_factory=lambda: get_int_env("SCHEDULED_FORECAST_HOUR", 9)
     )
     scheduled_forecast_minute: int = Field(
         default_factory=lambda: get_int_env("SCHEDULED_FORECAST_MINUTE", 0)

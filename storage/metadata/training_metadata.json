@@ -1,0 +1,22 @@
+{
+  "created_at": "2026-06-29T19:14:58.815133",
+  "top_n": 300,
+  "saved_model_count": 300,
+  "target_uoms": [
+    "PIEZA",
+    "CAJA",
+    "KG"
+  ],
+  "target_uom_label": "PIEZA, CAJA, KG",
+  "forecast_frequency": "weekly",
+  "default_horizon_weeks": 4,
+  "holiday_country_code": "MX",
+  "training_first_week": "2023-01-02",
+  "training_last_week": "2026-05-25",
+  "weekly_alignment": "W-SUN period start, Monday week_start_date",
+  "default_forecast_start_logic": "If forecast_start_date is not provided, start from training_last_week + 1 week.",
+  "be_input": {
+    "forecast_start_date": "optional YYYY-MM-DD",
+    "horizon_weeks": "optional integer, default 4"
+  }
+}

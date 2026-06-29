@@ -5,8 +5,8 @@ This backend runs the packaged Prophet forecasting artifacts, writes the latest
 
 Current workflow:
 
-1. Celery Beat schedules the forecast job for Sunday at 10 PM.
-2. The forecast job loads saved artifacts from `storage/forecast_artifacts`.
+1. Celery Beat schedules the forecast job for Monday at 9 AM.
+2. The forecast job loads the registry, metadata, and saved models from `storage/`.
 3. The generated CSV is written to
    `storage/forecasts/pieza_top_300_weekly_forecast.csv`.
 4. Celery Beat schedules the email job for Monday at 10 AM.
@@ -40,8 +40,8 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
 
-The forecast runner requires `numpy`, `pandas`, and `prophet` in addition to the
-API, worker, Redis, and email dependencies.
+The forecast runner requires `numpy`, `pandas`, `prophet`, and `holidays` in
+addition to the API, worker, Redis, and email dependencies.
 
 ## Environment
 
@@ -67,8 +67,8 @@ The rest of the app has defaults in `app/core/config.py`. Current defaults:
 SCHEDULED_TIMEZONE=America/Mexico_City
 
 SCHEDULED_FORECAST_ENABLED=true
-SCHEDULED_FORECAST_DAY_OF_WEEK=sun
-SCHEDULED_FORECAST_HOUR=22
+SCHEDULED_FORECAST_DAY_OF_WEEK=mon
+SCHEDULED_FORECAST_HOUR=9
 SCHEDULED_FORECAST_MINUTE=0
 
 SCHEDULED_EMAIL_ENABLED=true
@@ -77,7 +77,6 @@ SCHEDULED_EMAIL_HOUR=10
 SCHEDULED_EMAIL_MINUTE=0
 
 FORECAST_MODEL_CALLABLE=app.services.forecasting.predict_from_saved_models:run_saved_model_forecast
-FORECAST_ARTIFACT_DIR=storage/forecast_artifacts
 FORECAST_HORIZON_DAYS=14
 FORECAST_RESULT_FILE=storage/forecasts/pieza_top_300_weekly_forecast.csv
 JOB_STATUS_FILE=storage/status/job-status.json
@@ -97,20 +96,22 @@ override the default, for example when Redis is not on localhost.
 The saved model runner expects:
 
 ```txt
-storage/forecast_artifacts/
-  config.json
-  metadata.csv
+storage/
+  metadata/
+    training_metadata.json
   models/
-    model_*.json
+    *.json
+  registry/
+    model_registry.csv
 ```
 
 The current artifacts are configured for:
 
-- UOM: `PIEZA`
-- SKUs: top 300
+- UOMs: `PIEZA`, `CAJA`, and `KG`
+- Product/UOM combinations: top 300
 - Horizon: 2 weekly forecast periods
-- Output: `sku`, `product_name`, `uom`, `category_l1`, `category_l2`,
-  `week_start_date`, `forecasted_qty`
+- Output: one row per product/UOM with identity columns followed by one column
+  for each forecast week.
 
 ## Manual Testing
 
@@ -130,6 +131,29 @@ result = run_forecast()
 print(result)
 PY
 ```
+
+With no argument, the forecast begins in the Monday-based week containing
+today's date. To hardcode a specific start date in a Python call:
+
+```bash
+python3 - <<'PY'
+from app.services.forecast_service import run_forecast
+
+result = run_forecast(forecast_start_date="2026-07-06")
+print(result)
+PY
+```
+
+You can also pass a specific date directly to the predictor:
+
+```bash
+python3 -m app.services.forecasting.predict_from_saved_models \
+  --forecast-start-date 2026-07-06 \
+  --horizon-weeks 2
+```
+
+Dates use `YYYY-MM-DD`. A date that is not a Monday is aligned to the Monday at
+the beginning of that week.
 
 Verify the CSV:
 

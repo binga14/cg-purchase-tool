@@ -55,7 +55,7 @@ def build_forecast_email_body() -> str:
         [
             "Hello,",
             "",
-            "The latest 2-week sales forecast has been generated successfully.",
+            "The latest 4-week sales forecast has been generated successfully.",
             "The forecast CSV is attached.",
             "",
             f"Forecast horizon: {settings.forecast_horizon_days} days",

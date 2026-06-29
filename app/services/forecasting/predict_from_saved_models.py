@@ -1,172 +1,335 @@
+from __future__ import annotations
+
+import argparse
 import json
-import os
-from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-from prophet.forecaster import Prophet
+import holidays
 from prophet.serialize import model_from_json
 
 
-MA_BLEND_WEIGHT_DEFAULT = 0.50
+def _to_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if pd.isna(value):
+        return False
+
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-class SavedForecastModelError(RuntimeError):
-    pass
+def _format_week_label(date_value) -> str:
+    date_value = pd.Timestamp(date_value)
+    day = date_value.day
+
+    if 11 <= day <= 13:
+        suffix = "th"
+    else:
+        suffix = {
+            1: "st",
+            2: "nd",
+            3: "rd",
+        }.get(day % 10, "th")
+
+    return f"{day}{suffix} {date_value.strftime('%B')}"
 
 
-def _load_json(path: Path):
-    with open(path, "r") as fin:
-        return json.load(fin)
+def _build_weekly_holidays(
+    country_code: str,
+    start_year: int,
+    end_year: int,
+) -> pd.DataFrame:
+    holiday_calendar = holidays.country_holidays(
+        country_code,
+        years=list(range(start_year, end_year + 1)),
+    )
+
+    rows = []
+
+    for holiday_date, holiday_name in holiday_calendar.items():
+        holiday_timestamp = pd.Timestamp(holiday_date)
+        holiday_week_start = holiday_timestamp.to_period("W-SUN").start_time
+
+        rows.append({
+            "holiday": f"mx_{holiday_name}",
+            "ds": holiday_week_start,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["holiday", "ds", "lower_window", "upper_window"])
+
+    return (
+        pd.DataFrame(rows)
+        .drop_duplicates()
+        .assign(lower_window=0, upper_window=0)
+        .reset_index(drop=True)
+    )
 
 
-def _resolve_artifact_dir() -> Path:
-    """
-    Prefer FORECAST_ARTIFACT_DIR from environment.
-    Otherwise default to ./storage/forecast_artifacts from project root.
-    """
-    env_path = os.getenv("FORECAST_ARTIFACT_DIR")
-    if env_path:
-        return Path(env_path)
-
-    return Path("storage") / "forecast_artifacts"
-
-
-@contextmanager
-def _skip_prophet_backend_loading():
-    original_loader = Prophet._load_stan_backend
-
-    def load_no_backend(self, stan_backend):
-        self.stan_backend = None
-
-    Prophet._load_stan_backend = load_no_backend
+def _resolve_forecast_start_week(
+    forecast_start_date: Optional[str],
+) -> pd.Timestamp:
+    resolved_date = forecast_start_date or date.today().isoformat()
     try:
-        yield
-    finally:
-        Prophet._load_stan_backend = original_loader
+        return pd.Timestamp(resolved_date).to_period("W-SUN").start_time
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "forecast_start_date must use YYYY-MM-DD format."
+        ) from exc
 
 
-def run_saved_model_forecast(output_path: Path, horizon_days: Optional[int] = None) -> Path:
+def run_saved_model_forecast(
+    forecast_start_date: Optional[str] = None,
+    horizon_weeks: Optional[int] = None,
+    artifact_dir: Optional[str | Path] = None,
+    output_dir: Optional[str | Path] = None,
+    output_path: Optional[str | Path] = None,
+) -> dict:
     """
-    Backend-facing callable.
+    Load saved Prophet model artifacts and generate a top-N weekly sales forecast.
 
-    Called by app/services/forecast_service.py through FORECAST_MODEL_CALLABLE.
+    If forecast_start_date is provided:
+        forecast starts from that date's weekly start.
 
-    Parameters:
-        output_path:
-            Final CSV path expected by the backend.
-        horizon_days:
-            Existing backend setting. For this saved model version, the actual
-            horizon comes from forecast_artifacts/config.json. We validate it
-            loosely but do not retrain or change the saved model horizon.
+    If forecast_start_date is not provided:
+        forecast starts from the week containing today's date.
 
-    Returns:
-        Path to generated CSV.
+    Output:
+        A wide CSV with one row per product/UOM and one column per forecast week.
     """
-    artifact_dir = _resolve_artifact_dir()
-    model_dir = artifact_dir / "models"
-    config_path = artifact_dir / "config.json"
-    metadata_path = artifact_dir / "metadata.csv"
 
-    if not artifact_dir.exists():
-        raise SavedForecastModelError(f"Artifact directory not found: {artifact_dir}")
+    project_dir = Path(__file__).resolve().parents[3]
 
-    if not config_path.exists():
-        raise SavedForecastModelError(f"Missing artifact config: {config_path}")
+    artifact_dir = Path(artifact_dir) if artifact_dir else project_dir / "storage"
+    output_path = Path(output_path) if output_path else None
+    output_dir = (
+        Path(output_dir)
+        if output_dir
+        else output_path.parent
+        if output_path
+        else project_dir / "storage" / "forecasts"
+    )
+
+    models_dir = artifact_dir / "models"
+    registry_path = artifact_dir / "registry" / "model_registry.csv"
+    metadata_path = artifact_dir / "metadata" / "training_metadata.json"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not registry_path.exists():
+        raise FileNotFoundError(f"Missing model registry: {registry_path}")
 
     if not metadata_path.exists():
-        raise SavedForecastModelError(f"Missing artifact metadata: {metadata_path}")
+        raise FileNotFoundError(f"Missing training metadata: {metadata_path}")
 
-    if not model_dir.exists():
-        raise SavedForecastModelError(f"Missing model directory: {model_dir}")
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
 
-    config = _load_json(config_path)
-    metadata = pd.read_csv(metadata_path)
+    model_registry = pd.read_csv(registry_path)
 
-    forecast_horizon_weeks = int(config["forecast_horizon_weeks"])
-    last_training_week = pd.to_datetime(config["last_training_week"])
-    output_columns = config["output_columns"]
-    ma_blend_weight = float(config.get("ma_blend_weight", MA_BLEND_WEIGHT_DEFAULT))
+    if horizon_weeks is None:
+        horizon_weeks = int(metadata.get("default_horizon_weeks", 4))
+    if horizon_weeks < 1:
+        raise ValueError("horizon_weeks must be at least 1.")
 
-    if horizon_days is not None:
-        requested_weeks = max(1, round(int(horizon_days) / 7))
-        if requested_weeks != forecast_horizon_weeks:
-            print(
-                f"Warning: backend requested horizon_days={horizon_days} "
-                f"~ {requested_weeks} weeks, but artifact was trained for "
-                f"{forecast_horizon_weeks} weeks. Using artifact horizon."
-            )
+    training_last_week = metadata["training_last_week"]
+
+    forecast_start_week = _resolve_forecast_start_week(
+        forecast_start_date=forecast_start_date,
+    )
 
     future_week_index = pd.date_range(
-        start=last_training_week + pd.Timedelta(weeks=1),
-        periods=forecast_horizon_weeks,
+        start=forecast_start_week,
+        periods=horizon_weeks,
         freq="7D",
     )
 
-    output_rows = []
+    forecast_end_week = future_week_index.max()
 
-    for _, row in metadata.iterrows():
-        model_path = model_dir / row["model_file"]
+    holiday_country_code = metadata.get("holiday_country_code", "MX")
+    training_first_week = metadata.get("training_first_week", training_last_week)
 
-        if not model_path.exists():
-            raise SavedForecastModelError(f"Missing model file: {model_path}")
+    weekly_holidays = _build_weekly_holidays(
+        country_code=holiday_country_code,
+        start_year=pd.Timestamp(training_first_week).year,
+        end_year=forecast_end_week.year,
+    )
 
-        with open(model_path, "r") as fin:
-            with _skip_prophet_backend_loading():
-                model = model_from_json(json.load(fin))
+    ma_blend_weight = float(metadata.get("ma_blend_weight", 0.30))
 
-        future_df = pd.DataFrame({"ds": future_week_index})
+    forecast_rows = []
+    errors = []
 
-        use_lag = bool(row.get("use_lag_regressor", False))
-        if use_lag:
-            future_df["lag_mean"] = float(row["lag_mean"])
+    for _, row in model_registry.iterrows():
+        product_uom_id = row["product_uom_id"]
+        model_file = row["model_file"]
+        model_path = models_dir / model_file
 
-        forecast = model.predict(future_df)
+        try:
+            if not model_path.exists():
+                raise FileNotFoundError(f"Missing model file: {model_path}")
 
-        prophet_yhat = np.clip(
-            forecast["yhat"].to_numpy(),
-            a_min=0,
-            a_max=None,
-        )
+            with open(model_path, "r", encoding="utf-8") as f:
+                model = model_from_json(f.read())
 
-        ma_blended = bool(row.get("ma_blended", False))
-        if ma_blended:
-            ma_yhat = np.array(json.loads(row["ma_yhat_json"]), dtype=float)
-            final_yhat = (
-                (1 - ma_blend_weight) * prophet_yhat
-                + ma_blend_weight * ma_yhat
-            )
-        else:
-            final_yhat = prophet_yhat
+            # Extend holidays to cover the requested forecast window.
+            # This keeps prediction independent from raw training data.
+            model.holidays = weekly_holidays
 
-        for week_start_date, forecasted_qty in zip(future_week_index, final_yhat):
-            output_rows.append({
-                "sku": row["sku"],
-                "product_name": row["product_name"],
-                "uom": row["uom"],
-                "category_l1": row["category_l1"],
-                "category_l2": row["category_l2"],
-                "week_start_date": week_start_date.date().isoformat(),
-                "forecasted_qty": round(float(max(forecasted_qty, 0)), 2),
+            use_lag = _to_bool(row.get("use_lag", False))
+            ma_blended = _to_bool(row.get("ma_blended", False))
+
+            future_df = pd.DataFrame({
+                "ds": future_week_index,
             })
 
-    final_output = pd.DataFrame(output_rows)
+            if use_lag:
+                lag_mean_value = float(row.get("lag_mean_value", 0.0))
+                future_df["lag_mean"] = lag_mean_value
 
-    if final_output.empty:
-        raise SavedForecastModelError("Saved model generated an empty forecast output.")
+            forecast = model.predict(future_df)
 
-    final_output = final_output[output_columns]
+            prophet_yhat = np.clip(
+                forecast["yhat"].to_numpy(),
+                a_min=0,
+                a_max=None,
+            )
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+            if ma_blended:
+                ma_forecast_value = float(row.get("ma_forecast_value", 0.0))
+                final_yhat = (
+                    (1 - ma_blend_weight) * prophet_yhat
+                    + ma_blend_weight * ma_forecast_value
+                )
+            else:
+                final_yhat = prophet_yhat
 
-    final_output.to_csv(output_path, index=False)
+            output_row = {
+                "sku": row.get("product_id", ""),
+                "product_name": row.get("product_name", ""),
+                "uom": row.get("uom", ""),
+                "category_l1": row.get("category_l1", ""),
+                "category_l2": row.get("category_l2", ""),
+            }
 
-    print(f"Saved forecast CSV: {output_path}")
-    print(f"Rows: {len(final_output):,}")
-    print(f"Unique SKUs: {final_output['sku'].nunique():,}")
-    print(f"Columns: {list(final_output.columns)}")
+            for ds_value, yhat_value in zip(future_week_index, final_yhat):
+                output_row[_format_week_label(ds_value)] = round(float(yhat_value), 2)
 
-    return output_path
+            forecast_rows.append(output_row)
+
+        except Exception as exc:
+            errors.append({
+                "product_uom_id": product_uom_id,
+                "model_file": model_file,
+                "error_message": str(exc),
+            })
+
+    wide_forecast_df = pd.DataFrame(forecast_rows)
+
+    week_columns = [_format_week_label(date_value) for date_value in future_week_index]
+
+    expected_columns = [
+        "sku",
+        "product_name",
+        "uom",
+        "category_l1",
+        "category_l2",
+    ] + week_columns
+
+    for col in expected_columns:
+        if col not in wide_forecast_df.columns:
+            wide_forecast_df[col] = ""
+
+    wide_forecast_df = wide_forecast_df[expected_columns]
+
+    start_label = forecast_start_week.strftime("%Y_%m_%d")
+
+    output_csv_path = output_path or (
+        output_dir
+        / f"top_{len(wide_forecast_df)}_weekly_forecast_start_{start_label}_next_{horizon_weeks}_weeks_wide.csv"
+    )
+
+    error_csv_path = None
+
+    if errors:
+        error_df = pd.DataFrame(errors)
+        error_csv_path = output_dir / f"forecast_errors_start_{start_label}.csv"
+        error_df.to_csv(error_csv_path, index=False, encoding="utf-8-sig")
+        raise RuntimeError(
+            f"Forecast failed for {len(errors)} of {len(model_registry)} models. "
+            f"See '{error_csv_path}'."
+        )
+
+    if wide_forecast_df.empty:
+        raise RuntimeError("Forecast completed without generating any rows.")
+
+    wide_forecast_df.to_csv(
+        output_csv_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    return {
+        "forecast_start_week": str(forecast_start_week.date()),
+        "forecast_end_week": str(forecast_end_week.date()),
+        "horizon_weeks": horizon_weeks,
+        "forecast_rows": int(len(wide_forecast_df)),
+        "output_csv_path": str(output_csv_path),
+        "error_count": int(len(errors)),
+        "error_csv_path": str(error_csv_path) if error_csv_path else None,
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--forecast-start-date",
+        type=str,
+        default=None,
+        help="Optional forecast start date in YYYY-MM-DD format.",
+    )
+
+    parser.add_argument(
+        "--horizon-weeks",
+        type=int,
+        default=None,
+        help="Optional forecast horizon in weeks. Defaults to metadata value.",
+    )
+
+    parser.add_argument(
+        "--artifact-dir",
+        type=str,
+        default=None,
+        help="Optional artifact directory path.",
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Optional output directory path.",
+    )
+
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        default=None,
+        help="Optional exact output CSV path.",
+    )
+
+    args = parser.parse_args()
+
+    result = run_saved_model_forecast(
+        forecast_start_date=args.forecast_start_date,
+        horizon_weeks=args.horizon_weeks,
+        artifact_dir=args.artifact_dir,
+        output_dir=args.output_dir,
+        output_path=args.output_path,
+    )
+
+    print(json.dumps(result, indent=2))
