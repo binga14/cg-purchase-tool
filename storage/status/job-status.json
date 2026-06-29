@@ -1,16 +1,16 @@
 {
   "email": {
-    "completedAt": "2026-06-29T15:01:32.166165+00:00",
+    "completedAt": "2026-06-29T16:14:33.610630+00:00",
     "errorMessage": null,
-    "sentAt": "2026-06-29T15:01:32.166190+00:00",
-    "startedAt": "2026-06-29T15:01:30.141037+00:00",
+    "sentAt": "2026-06-29T16:14:33.610666+00:00",
+    "startedAt": "2026-06-29T16:14:31.427471+00:00",
     "status": "success"
   },
   "forecast": {
-    "completedAt": "2026-06-29T15:00:46.793375+00:00",
+    "completedAt": "2026-06-29T16:06:16.243967+00:00",
     "errorMessage": null,
-    "outputPath": "storage/forecasts/pieza_top_300_weekly_forecast.csv",
-    "startedAt": "2026-06-29T15:00:41.525637+00:00",
+    "outputPath": "storage/forecasts/top_300_weekly_forecast.csv",
+    "startedAt": "2026-06-29T16:06:11.122327+00:00",
     "status": "success"
   }
 }

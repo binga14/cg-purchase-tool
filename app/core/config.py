@@ -50,7 +50,7 @@ class Settings(BaseModel):
     forecast_result_file: Path = Field(
         default_factory=lambda: get_path_env(
             "FORECAST_RESULT_FILE",
-            "storage/forecasts/pieza_top_300_weekly_forecast.csv",
+            "storage/forecasts/top_300_weekly_forecast.csv",
         )
     )
     job_status_file: Path = Field(

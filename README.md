@@ -1,19 +1,22 @@
 # Forecast Email Backend
 
 This backend runs the packaged Prophet forecasting artifacts, writes the latest
-2-week CSV forecast, tracks job status, and emails the CSV report on a schedule.
+forecast as both CSV and a styled Excel report, tracks job status, and emails
+the report on a schedule.
 
 Current workflow:
 
 1. Celery Beat schedules the forecast job for Monday at 9 AM.
 2. The forecast job loads the registry, metadata, and saved models from `storage/`.
-3. The generated CSV is written to
-   `storage/forecasts/pieza_top_300_weekly_forecast.csv`.
+3. The generated reports are written to:
+   - `storage/forecasts/top_300_weekly_forecast.csv`
+   - `storage/forecasts/top_300_weekly_forecast.xlsx`
 4. Celery Beat schedules the email job for Monday at 10 AM.
-5. The email job attaches the latest forecast CSV and sends it through Resend.
+5. The email job attaches the styled Excel report and sends it through Resend.
 
-The generated CSV is not committed to git. The `storage/forecasts/` folder is
-kept with `.gitkeep`, and the CSV appears there after the forecast job runs.
+The generated reports are not committed to git. The `storage/forecasts/` folder
+is kept with `.gitkeep`, and the CSV/XLSX files appear there after the forecast
+job runs.
 
 ## API
 
@@ -78,7 +81,7 @@ SCHEDULED_EMAIL_MINUTE=0
 
 FORECAST_MODEL_CALLABLE=app.services.forecasting.predict_from_saved_models:run_saved_model_forecast
 FORECAST_HORIZON_DAYS=28
-FORECAST_RESULT_FILE=storage/forecasts/pieza_top_300_weekly_forecast.csv
+FORECAST_RESULT_FILE=storage/forecasts/top_300_weekly_forecast.csv
 JOB_STATUS_FILE=storage/status/job-status.json
 
 CELERY_BROKER_URL=redis://localhost:6379/0
@@ -109,9 +112,10 @@ The current artifacts are configured for:
 
 - UOMs: `PIEZA`, `CAJA`, and `KG`
 - Product/UOM combinations: top 300
-- Horizon: 2 weekly forecast periods
-- Output: one row per product/UOM with identity columns followed by one column
-  for each forecast week.
+- Horizon: controlled by `FORECAST_HORIZON_DAYS`; 28 days produces 4 weekly
+  forecast periods.
+- Output: one row per product/UOM with identity columns, one column for each
+  forecast week, and a total column.
 
 ## Manual Testing
 
@@ -155,18 +159,18 @@ python3 -m app.services.forecasting.predict_from_saved_models \
 Dates use `YYYY-MM-DD`. A date that is not a Monday is aligned to the Monday at
 the beginning of that week.
 
-Verify the CSV:
+Verify the generated reports:
 
 ```bash
 ls -lh storage/forecasts/
 python3 - <<'PY'
 import pandas as pd
 
-path = "storage/forecasts/pieza_top_300_weekly_forecast.csv"
+path = "storage/forecasts/top_300_weekly_forecast.csv"
 df = pd.read_csv(path)
 print(df.shape)
 print(df.head())
-print(df["sku"].nunique())
+print(df["Código"].nunique())
 PY
 ```
 

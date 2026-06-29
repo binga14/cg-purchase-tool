@@ -1,5 +1,6 @@
 import base64
 from email.utils import formataddr
+from math import ceil
 from pathlib import Path
 
 import resend
@@ -51,12 +52,13 @@ def validate_email_settings() -> None:
 
 def build_forecast_email_body() -> str:
     settings = get_settings()
+    horizon_weeks = max(1, ceil(settings.forecast_horizon_days / 7))
     return "\n".join(
         [
             "Hello,",
             "",
-            "The latest 4-week sales forecast has been generated successfully.",
-            "The forecast CSV is attached.",
+            f"The latest {horizon_weeks}-week sales forecast has been generated successfully.",
+            "The forecast report is attached.",
             "",
             f"Forecast horizon: {settings.forecast_horizon_days} days",
             "",
@@ -64,6 +66,19 @@ def build_forecast_email_body() -> str:
             settings.email_from_name,
         ]
     )
+
+
+def get_forecast_report_attachment_path() -> Path:
+    settings = get_settings()
+    csv_path = settings.forecast_result_file
+    xlsx_path = csv_path.with_suffix(".xlsx")
+    return xlsx_path if xlsx_path.exists() else csv_path
+
+
+def get_attachment_content_type(result_path: Path) -> str:
+    if result_path.suffix.lower() == ".xlsx":
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return "text/csv"
 
 
 def build_forecast_email_params(result_path: Path) -> "resend.Emails.SendParams":
@@ -79,20 +94,20 @@ def build_forecast_email_params(result_path: Path) -> "resend.Emails.SendParams"
             {
                 "filename": result_path.name,
                 "content": attachment_content,
-                "content_type": "text/csv",
+                "content_type": get_attachment_content_type(result_path),
             }
         ],
     }
 
 
 def send_forecast_email() -> None:
-    settings = get_settings()
-    result_path = settings.forecast_result_file
+    result_path = get_forecast_report_attachment_path()
     if not result_path.exists():
-        raise ForecastEmailError(f"Forecast CSV was not found at '{result_path}'.")
+        raise ForecastEmailError(f"Forecast report was not found at '{result_path}'.")
     if result_path.stat().st_size == 0:
-        raise ForecastEmailError(f"Forecast CSV at '{result_path}' is empty.")
+        raise ForecastEmailError(f"Forecast report at '{result_path}' is empty.")
 
     validate_email_settings()
+    settings = get_settings()
     resend.api_key = settings.resend_api_key
     resend.Emails.send(build_forecast_email_params(result_path))

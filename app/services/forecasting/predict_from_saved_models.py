@@ -9,6 +9,9 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import holidays
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from prophet.serialize import model_from_json
 
 
@@ -22,20 +25,113 @@ def _to_bool(value) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-def _format_week_label(date_value) -> str:
+def _format_week_label(date_value, week_number: int) -> str:
     date_value = pd.Timestamp(date_value)
-    day = date_value.day
+    return f"Sem {week_number}\n({date_value.strftime('%d %b')})"
 
-    if 11 <= day <= 13:
-        suffix = "th"
-    else:
-        suffix = {
-            1: "st",
-            2: "nd",
-            3: "rd",
-        }.get(day % 10, "th")
 
-    return f"{day}{suffix} {date_value.strftime('%B')}"
+def _write_styled_excel_report(
+    forecast_df: pd.DataFrame,
+    output_xlsx_path: Path,
+    horizon_weeks: int,
+) -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Pronóstico"
+
+    max_column = len(forecast_df.columns)
+    title_fill = PatternFill("solid", fgColor="203B66")
+    warning_fill = PatternFill("solid", fgColor="FFF2CC")
+    header_fill = PatternFill("solid", fgColor="203B66")
+    total_fill = PatternFill("solid", fgColor="D9E2F3")
+    row_fill = PatternFill("solid", fgColor="F2F2F2")
+    white_font = Font(color="FFFFFF", bold=True)
+    warning_font = Font(color="C00000", bold=True)
+    thin_border = Border(
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
+    )
+
+    worksheet.merge_cells(
+        start_row=1,
+        start_column=1,
+        end_row=1,
+        end_column=max_column,
+    )
+    title_cell = worksheet.cell(row=1, column=1)
+    title_cell.value = (
+        f"Pronóstico de Demanda — Próximas {horizon_weeks} Semanas "
+        "(V1 · solo demanda · revisión humana requerida)"
+    )
+    title_cell.fill = title_fill
+    title_cell.font = Font(color="FFFFFF", bold=True, size=16)
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    worksheet.row_dimensions[1].height = 28
+
+    worksheet.merge_cells(
+        start_row=2,
+        start_column=1,
+        end_row=2,
+        end_column=max_column,
+    )
+    warning_cell = worksheet.cell(row=2, column=1)
+    warning_cell.value = (
+        "PRONÓSTICO, NO ORDEN DE COMPRA. Cantidades con valor exacto "
+        "(decimales), SIN MOQ / empaque / inventario / tiempo de entrega. "
+        "No comprar directamente de esta tabla — requiere revisión de un planeador."
+    )
+    warning_cell.fill = warning_fill
+    warning_cell.font = warning_font
+    warning_cell.alignment = Alignment(
+        horizontal="center",
+        vertical="center",
+        wrap_text=True,
+    )
+    worksheet.row_dimensions[2].height = 42
+
+    for column_index, column_name in enumerate(forecast_df.columns, start=1):
+        cell = worksheet.cell(row=3, column=column_index, value=column_name)
+        cell.fill = header_fill
+        cell.font = white_font
+        cell.border = thin_border
+        cell.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+            wrap_text=True,
+        )
+    worksheet.row_dimensions[3].height = 42
+
+    for row_index, row in enumerate(forecast_df.itertuples(index=False), start=4):
+        for column_index, value in enumerate(row, start=1):
+            cell = worksheet.cell(row=row_index, column=column_index, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(
+                horizontal="left" if column_index <= 5 else "right",
+                vertical="center",
+            )
+            if row_index % 2 == 0:
+                cell.fill = row_fill
+            if column_index > 5:
+                cell.number_format = '#,##0.00'
+            if column_index == max_column:
+                cell.fill = total_fill
+                cell.font = Font(bold=True)
+
+    for column_index, width in enumerate(
+        [16, 48, 12, 22, 28] + [14] * (max_column - 6) + [16],
+        start=1,
+    ):
+        worksheet.column_dimensions[get_column_letter(column_index)].width = width
+
+    worksheet.freeze_panes = "A4"
+    worksheet.auto_filter.ref = (
+        f"A3:{get_column_letter(max_column)}{len(forecast_df) + 3}"
+    )
+
+    output_xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_xlsx_path)
 
 
 def _build_weekly_holidays(
@@ -209,15 +305,23 @@ def run_saved_model_forecast(
                 final_yhat = prophet_yhat
 
             output_row = {
-                "sku": row.get("product_id", ""),
-                "product_name": row.get("product_name", ""),
-                "uom": row.get("uom", ""),
-                "category_l1": row.get("category_l1", ""),
-                "category_l2": row.get("category_l2", ""),
+                "Código": row.get("product_id", ""),
+                "Producto": row.get("product_name", ""),
+                "UDM": row.get("uom", ""),
+                "Categoría": row.get("category_l1", ""),
+                "Subcategoría": row.get("category_l2", ""),
             }
 
-            for ds_value, yhat_value in zip(future_week_index, final_yhat):
-                output_row[_format_week_label(ds_value)] = round(float(yhat_value), 2)
+            week_total = 0.0
+            for week_number, (ds_value, yhat_value) in enumerate(
+                zip(future_week_index, final_yhat),
+                start=1,
+            ):
+                forecast_value = round(float(yhat_value), 2)
+                output_row[_format_week_label(ds_value, week_number)] = forecast_value
+                week_total += forecast_value
+
+            output_row[f"Total {horizon_weeks} sem."] = round(week_total, 2)
 
             forecast_rows.append(output_row)
 
@@ -230,15 +334,19 @@ def run_saved_model_forecast(
 
     wide_forecast_df = pd.DataFrame(forecast_rows)
 
-    week_columns = [_format_week_label(date_value) for date_value in future_week_index]
+    week_columns = [
+        _format_week_label(date_value, week_number)
+        for week_number, date_value in enumerate(future_week_index, start=1)
+    ]
 
     expected_columns = [
-        "sku",
-        "product_name",
-        "uom",
-        "category_l1",
-        "category_l2",
+        "Código",
+        "Producto",
+        "UDM",
+        "Categoría",
+        "Subcategoría",
     ] + week_columns
+    expected_columns.append(f"Total {horizon_weeks} sem.")
 
     for col in expected_columns:
         if col not in wide_forecast_df.columns:
@@ -273,12 +381,20 @@ def run_saved_model_forecast(
         encoding="utf-8-sig",
     )
 
+    output_xlsx_path = output_csv_path.with_suffix(".xlsx")
+    _write_styled_excel_report(
+        forecast_df=wide_forecast_df,
+        output_xlsx_path=output_xlsx_path,
+        horizon_weeks=horizon_weeks,
+    )
+
     return {
         "forecast_start_week": str(forecast_start_week.date()),
         "forecast_end_week": str(forecast_end_week.date()),
         "horizon_weeks": horizon_weeks,
         "forecast_rows": int(len(wide_forecast_df)),
         "output_csv_path": str(output_csv_path),
+        "output_xlsx_path": str(output_xlsx_path),
         "error_count": int(len(errors)),
         "error_csv_path": str(error_csv_path) if error_csv_path else None,
     }
