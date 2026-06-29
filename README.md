@@ -77,7 +77,7 @@ SCHEDULED_EMAIL_HOUR=10
 SCHEDULED_EMAIL_MINUTE=0
 
 FORECAST_MODEL_CALLABLE=app.services.forecasting.predict_from_saved_models:run_saved_model_forecast
-FORECAST_HORIZON_DAYS=14
+FORECAST_HORIZON_DAYS=28
 FORECAST_RESULT_FILE=storage/forecasts/pieza_top_300_weekly_forecast.csv
 JOB_STATUS_FILE=storage/status/job-status.json
 
@@ -85,7 +85,7 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 
 EMAIL_FROM_NAME=Forecast Purchase App
-FORECAST_EMAIL_SUBJECT=Weekly 2-week sales forecast
+FORECAST_EMAIL_SUBJECT=Weekly 4-week sales forecast
 ```
 
 Set any of those in `.env` or server environment variables only when you need to

@@ -113,7 +113,7 @@ class Settings(BaseModel):
     )
     forecast_email_subject: str = Field(
         default_factory=lambda: os.getenv(
-            "FORECAST_EMAIL_SUBJECT", "Weekly 2-week sales forecast"
+            "FORECAST_EMAIL_SUBJECT", "Weekly 4-week sales forecast"
         )
     )
     forecast_report_recipients: Tuple[str, ...] = Field(
